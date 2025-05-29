@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"distributed-kv-store-go-v2/server"
 	"distributed-kv-store-go-v2/store"
 	"encoding/json"
 	"fmt"
@@ -13,11 +14,12 @@ import (
 )
 
 type Config struct {
-	Peers []string `json:"peers"`
-	Port  string   `json:"port"`
+	Peers  []string `json:"peers"`
+	Port   string   `json:"port"`
+	Leader bool     `json:"leader"`
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, isLeader bool) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
@@ -29,21 +31,41 @@ func handleConnection(conn net.Conn) {
 		}
 
 		args := strings.Split(strings.TrimSpace(msg), " ")
+		if len(args) == 0 {
+			conn.Write([]byte("ERR: Empty command\n"))
+			continue
+		}
 
-		operation := args[1]
+		operation := args[0]
 		if operation == "REPL" {
-			// handle replication
+			server.HandlePeerMessage(conn, args[1:])
+			return
 		}
 
 		switch operation {
 		case "GET":
 			store.Get(conn, args)
 		case "SET":
-			store.Set(conn, args)
+			if isLeader {
+				store.Set(conn, args)
+				server.BroadcastToPeers("REPL " + msg)
+			} else {
+				conn.Write([]byte("ERR : Not the leader\n"))
+			}
 		case "DEL":
-			store.Del(conn, args)
+			if isLeader {
+				store.Del(conn, args)
+				server.BroadcastToPeers("REPL " + msg)
+			} else {
+				conn.Write([]byte("ERR : Not the leader\n"))
+			}
 		case "EXPIRE":
-			store.Expire(conn, args)
+			if isLeader {
+				store.Expire(conn, args)
+				server.BroadcastToPeers("REPL " + msg)
+			} else {
+				conn.Write([]byte("ERR : Not the leader\n"))
+			}
 		default:
 			conn.Write([]byte(fmt.Sprintf("Unknown operation: %v \n" + operation)))
 		}
@@ -74,12 +96,14 @@ func main() {
 		log.Fatal(err)
 	}
 
+	server.InitReplicator(config.Peers)
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		go handleConnection(conn)
+		go handleConnection(conn, config.Leader)
 	}
 }

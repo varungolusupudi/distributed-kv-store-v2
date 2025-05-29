@@ -1,0 +1,5 @@
+{
+  "port": ":8082",
+  "peers": ["localhost:8080", "localhost:8081"],
+  "leader": false
+}
